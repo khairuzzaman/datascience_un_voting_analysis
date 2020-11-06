@@ -1,0 +1,250 @@
+---
+title: 'Exploratory Data Analysis: United Nations Voting Pattern, Bangladesh Perspective'
+author: "Abu Zafor Khairuzzaman"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    theme: united
+    toc: false
+    keep_md: yes
+  pdf_document: default
+---
+
+```{r include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(broom)
+library(countrycode)
+library(purrr)
+
+countries_1 <- c("Bangladesh", "Bhutan", "India", "Maldives", "Nepal", "Pakistan", "Sri Lanka")
+
+countries_2 <- c("Bangladesh", "India", "China", "United States of America", "United Kingdom of Great Britain and Northern Ireland", "Russian Federation")
+
+
+```
+
+In this exploratory data analysis we will explore the historical voting of the **United Nations General Assembly**, analysis the voting pattern of Bangladesh over time. For this analysis we will use a data set collected from [dataverse](dataverse.harvard.edu)
+
+## Loading the data
+
+```{r message=FALSE, echo=FALSE, include=FALSE}
+fileUrl <- "http://dataverse.harvard.edu/api/access/datafile/:persistentId?persistentId=doi:10.7910/DVN/LEJUQZ/HAPPV6"
+fileName <- "UNVotes.csv"
+if(!file.exists(paste("data/",fileName, sep = ""))){
+  download.file(fileUrl, destfile = "data/UNVotes.csv")
+  dateDownloaded <- date()
+}
+
+```
+
+**Read data and view data frame structure**
+
+```{r message=FALSE, cache=TRUE}
+votes <- read.csv("data/UNVotes.csv")
+votes <- as_tibble(votes)
+str(votes)
+
+```
+
+The vote column of the votes dataset represent the vote of a country for a particular issue. The number indicates as:
+
+- 1 = Yes
+- 2 = Abstain
+- 3 = No
+- 8 = Not present
+- 9 = Not a member
+
+In our analysis we will just consider first 3 type of votes, Yes, Abstain & No. So in below step we will filter out the unnecessary data.
+
+```{r message=FALSE}
+votes <- votes %>%
+  filter(vote <= 3)
+```
+
+## Summarizing Votes
+Now, we will summarize the votes cast by Bangladesh and plot a time series using the data to visualize the voting cast by Bangladesh.
+
+
+```{r message=FALSE}
+votes_processed_bangladesh <- votes %>%
+  filter(Countryname == "Bangladesh") %>%
+  group_by(year) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1))
+
+ggplot(votes_processed_bangladesh, aes(x = year, y = percent_yes)) + geom_line()
+```
+
+From the line plot we can easily say that most of the time **Yes** vote casting by Bangladesh over **85%**.
+
+Lets do some comparison with the South Asian countries.
+
+```{r message=FALSE}
+votes_processed <- votes %>%
+  filter(Countryname %in% countries_1) %>%
+  group_by(Countryname, year) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1))
+
+ggplot(votes_processed, aes(x = year, y = percent_yes)) + geom_line() + facet_wrap(~ Countryname)
+```
+
+From this comparison we can easily see that Bangladesh, Bhutan & Maldives have some similarities. Lets apply one more filter, since Bangladesh born in 1971, we will consider the vote after 1971.
+
+```{r message=FALSE}
+votes_processed <- votes %>%
+  filter(Countryname %in% countries_1, year >= 1972) %>%
+  group_by(Countryname, year) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1))
+
+ggplot(votes_processed, aes(x = year, y = percent_yes)) + geom_line() + facet_wrap(~ Countryname)
+```
+
+In this time period (1972-2020), we can see that Bangladesh, Maldives, Nepal & Sri Lanka cast positive vote in between 80%-100%. They are also consistent for casting positive vote.
+
+## Tidying data
+
+In this section we will use some R package to make our data tidy. After that we will perform analysis on tidied data. We do not need all 26 columns in our analysis so lets first remove unnecessary columns from the data frame.
+
+```{r message=FALSE}
+votes_tidied <- votes %>%
+  select(rcid:session, unres,me:ec)
+```
+
+There are 6 columns in the dataset that describe the topic of a resolution,
+
+- **me**: Palestinian conflict
+- **nu**: Nuclear weapons and nuclear material
+- **di**: Arms control and disarmament
+- **hr**: Human rights
+- **co**: Colonialism
+- **ec**: Economic development
+
+Now, we will transform the data so that each row has one combination of country-vote-topic so that we can analyze the graph by topic.
+
+```{r message=FALSE}
+votes_tidied <- votes_tidied %>%
+  gather(topic, has_topic, me:ec) %>%
+  filter(has_topic == 1)
+
+head(votes_tidied)
+
+```
+
+It is difficult to interpret me, nu etc.. Lets re-code this abbreviation with the actual name.
+
+```{r message=FALSE}
+votes_tidied <- votes_tidied %>%
+  mutate(topic = recode(topic,
+                        me = "Palestinian conflict",
+                        nu = "Nuclear weapons and nuclear material",
+                        di = "Arms control and disarmament",
+                        hr = "Human rights",
+                        co = "Colonialism",
+                        ec = "Economic development"))
+
+by_country_year_topic <- votes_tidied %>%
+  group_by(Countryname, year, topic) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1)) %>%
+  ungroup()
+
+head(by_country_year_topic)
+
+```
+
+Lets analyze topic wise vote for Bangladesh.
+
+```{r message=FALSE}
+bd_by_country_year_topic <- by_country_year_topic %>%
+  filter(Countryname == "Bangladesh")
+
+ggplot(bd_by_country_year_topic, aes(x = year, y = percent_yes)) + geom_line() + 
+  facet_wrap(~ topic)
+```
+
+From the above plot it seems, Human rights Bangladesh's votes has changes significantly over time. 
+
+
+## Modeling
+
+Now, we will apply statistical modeling and quantify the trends across the countries and interpret them together. First we will fit the linear regression model for the percentage of YES votes from Bangladesh.
+
+```{r message=FALSE}
+BD_by_year <- votes_tidied %>%
+  group_by(Countryname, year) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1)) %>%
+  filter(Countryname == "Bangladesh")
+BD_fit <- lm(percent_yes ~ year, data = BD_by_year)
+summary(BD_fit)
+```
+
+From the applied linear model we can see that, the estimated change each year of the probability of the Bangladesh voting "yes" is -0.00004368. Which is not so much significant. We also observe that from the p-value which is 0.8683 in this case (p-value below 0.05 are significant)
+
+Now we will fit this model for each topic and check that if there is any particular topic which has significant changes over time.
+
+```{r message=FALSE}
+BD_by_year_by_topic <- votes_tidied %>%
+  group_by(Countryname, year, topic) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1)) %>%
+  filter(Countryname == "Bangladesh")
+
+Bangladesh_topics_coefficients <- BD_by_year_by_topic %>%
+  nest(-topic) %>%
+  mutate(model = map(data, ~ lm(percent_yes ~ year, data = .)), tidied = map(model, tidy)) %>%
+  unnest(tidied)
+
+Bangladesh_topics_coefficients %>%
+  filter(term == "year") %>%
+  mutate(p.adjusted = p.adjust(p.value)) %>%
+  filter(p.adjusted < 0.05)
+  
+```
+
+From the above analysis we can see that, over the time Bangladesh's voting pattern significantly change for two topics **Arms control and disarmament & Colonialism**. 
+
+Finally in the last analysis we will compare the voting with some developed countries and try to visualize, is there any similarities between them.  
+
+
+```{r message=FALSE, out.width="100%"}
+knitr::opts_chunk$set(fig.height = 9, fig.width = 7)
+votes_by_topic_by_country <- votes %>%
+  select(rcid:session, unres,me:ec) %>%
+  filter(Countryname %in% countries_2, year >= 1972) %>%
+  gather(topic, has_topic, me:ec) %>%
+  filter(has_topic == 1) %>%
+  mutate(topic = recode(topic,
+                        me = "Palestinian conflict",
+                        nu = "Nuclear weapons and nuclear material",
+                        di = "Arms control and disarmament",
+                        hr = "Human rights",
+                        co = "Colonialism",
+                        ec = "Economic development")) %>%
+  group_by(Countryname, Country, year, topic) %>%
+  summarize(total = n(), percent_yes = mean(vote == 1)) %>%
+  ungroup()
+
+ggplot(votes_by_topic_by_country, aes(x = year, y = percent_yes, color=Country)) + geom_line() + facet_wrap(~ topic)
+
+```
+
+From the above analysis we can see that, for some topic, like **Human rights, Colonialism & Economic development**, there is a little bit similarities in voting between Bangladesh, India & China but other topics there is no similarities.
+
+## Next
+So we can carry out our analysis further and try to answer the following questions
+
+1. For Bangladesh, is voting pattern has similarities when different political party is in power?
+2. Which countries has similar voting pattern?
+3. Can we identify similar interest between different countries by analysis the voting similarities?
+4. Which country have significant changes in voting?
+
+## References
+1. [Data Source](https://dataverse.harvard.edu/file.xhtml?persistentId=doi:10.7910/DVN/LEJUQZ/HAPPV6&version=27.0)
+2. [Datacamp Course](https://learn.datacamp.com/courses/case-study-exploratory-data-analysis-in-r)
+
+
+
+
+
+
+
+
